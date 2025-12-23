@@ -115,8 +115,10 @@ export default async function handler(req) {
           try {
             // GOOGLE STREAMING
             if (provider === 'GOOGLE' || provider === 'GOOGLE_EXP') {
-              const apiKey = process.env.API_KEY;
-              if (!apiKey) throw new Error("API Key Google missing");
+              // UPDATED: Check for both standard API_KEY and Vercel Integration GOOGLE_GENERATIVE_AI_API_KEY
+              const apiKey = process.env.API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+              
+              if (!apiKey) throw new Error("API Key Google missing (API_KEY or GOOGLE_GENERATIVE_AI_API_KEY)");
               const ai = new GoogleGenAI({ apiKey });
               
               // Determine model based on provider selection
@@ -150,7 +152,6 @@ export default async function handler(req) {
               } else if (provider === 'TOGETHER') {
                  iterator = streamOpenAICompatible('https://api.together.xyz/v1/chat/completions', process.env.TOGETHER_API_KEY, 'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo', messages);
               } else if (provider === 'OLLAMA') {
-                 // For Ollama, we do a simple pass-through fetch since it's likely local/tunnel
                  const baseUrl = process.env.OLLAMA_BASE_URL;
                  const response = await fetch(`${baseUrl}/api/chat`, {
                     method: 'POST',
@@ -158,12 +159,9 @@ export default async function handler(req) {
                     body: JSON.stringify({ model: 'llama3', messages, stream: true })
                  });
                  if (!response.ok) throw new Error("Ollama Error");
-                 // Pipe Ollama's stream directly (Ollama sends NDJSON objects)
-                 // Simplifying: For now, assume Ollama users use non-stream or handle NDJSON parsing elsewhere if strictly needed. 
-                 // But for compatibility let's just fall back to block for Ollama complexity or basic stream.
-                 // Actually, let's just treat Ollama as block for stability in this 'stream' block for now or implement full parser later.
-                 // Reverting Ollama to block for safety in this iteration.
-                 const blockText = await fetchOpenAICompatibleBlock(`${baseUrl}/api/chat`, '', 'llama3', messages); // Proxy to block
+                 
+                 // Fallback block for Ollama complexity
+                 const blockText = await fetchOpenAICompatibleBlock(`${baseUrl}/api/chat`, '', 'llama3', messages); 
                  controller.enqueue(encoder.encode(blockText));
                  controller.close();
                  return; 
@@ -195,7 +193,9 @@ export default async function handler(req) {
     let resultText = "";
     
     if (provider === 'GOOGLE' || provider === 'GOOGLE_EXP') {
-      const apiKey = process.env.API_KEY;
+      // UPDATED: Check for both standard API_KEY and Vercel Integration GOOGLE_GENERATIVE_AI_API_KEY
+      const apiKey = process.env.API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+      
       const ai = new GoogleGenAI({ apiKey });
       const targetModel = provider === 'GOOGLE_EXP' ? 'gemini-2.0-flash-exp' : 'gemini-1.5-flash';
       const response = await ai.models.generateContent({
