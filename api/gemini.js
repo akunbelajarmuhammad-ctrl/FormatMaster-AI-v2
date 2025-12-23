@@ -33,6 +33,10 @@ async function* streamOpenAICompatible(url, apiKey, model, messages) {
     if (err.includes("model_decommissioned")) {
         throw new Error("Model AI ini sudah pensiun. Developer sedang mengupdate sistem...");
     }
+    // Special handling for OpenRouter invalid models
+    if (err.includes("is not a valid model ID")) {
+        throw new Error("Model ID tidak valid. Silakan coba jalur lain sementara waktu.");
+    }
     throw new Error(`Provider Error (${response.status}): ${err}`);
   }
 
@@ -121,14 +125,15 @@ export default async function handler(req) {
               if (!apiKey) throw new Error("API Key Google missing");
               const ai = new GoogleGenAI({ apiKey });
               
-              // MODEL LIST TO TRY
+              // MODEL LIST TO TRY (UPDATED TO REMOVE DEPRECATED NAMES)
               let modelsToTry = [];
               if (provider === 'GOOGLE_EXP') {
-                 // Try Thinking first, then Standard 2.0, then 1.5
-                 modelsToTry = ['gemini-2.0-flash-thinking-exp-01-21', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+                 // Try Thinking first, then Standard 2.0, then Flash Latest (Alias)
+                 modelsToTry = ['gemini-2.0-flash-thinking-exp-01-21', 'gemini-2.0-flash', 'gemini-flash-latest'];
               } else {
-                 // Try 2.0 Flash first (New Standard), then 1.5 Flash (Old Faithful)
-                 modelsToTry = ['gemini-2.0-flash', 'gemini-1.5-flash'];
+                 // Try 2.0 Flash first, then 2.0 Flash Lite (Preview), then Flash Latest (Alias)
+                 // 'gemini-1.5-flash' REMOVED to prevent 404s
+                 modelsToTry = ['gemini-2.0-flash', 'gemini-2.0-flash-lite-preview-02-05', 'gemini-flash-latest'];
               }
 
               let success = false;
@@ -156,7 +161,6 @@ export default async function handler(req) {
                   console.warn(`Model ${model} failed, trying next... Error: ${e.message}`);
                   lastError = e;
                   // If we already sent partial data (success=true), we can't really retry cleanly in this simple stream
-                  // So we only retry if we haven't sent ANYTHING yet.
                   if (success) break; 
                 }
               }
@@ -177,8 +181,8 @@ export default async function handler(req) {
                  // Llama 3.3 70B (Replaces 3.1)
                  iterator = streamOpenAICompatible('https://api.groq.com/openai/v1/chat/completions', process.env.GROQ_API_KEY, 'llama-3.3-70b-versatile', messages);
               } else if (provider === 'OPENROUTER') {
-                 // Use Google Flash Lite Free via OpenRouter (Often more stable than Mistral Free)
-                 iterator = streamOpenAICompatible('https://openrouter.ai/api/v1/chat/completions', process.env.OPENROUTER_API_KEY, 'google/gemini-2.0-flash-lite-preview-02-05:free', messages);
+                 // FIXED MODEL ID: google/gemini-2.0-flash-exp:free (More stable than the lite preview ID)
+                 iterator = streamOpenAICompatible('https://openrouter.ai/api/v1/chat/completions', process.env.OPENROUTER_API_KEY, 'google/gemini-2.0-flash-exp:free', messages);
               } else if (provider === 'TOGETHER') {
                  // Llama 3.3 70B Turbo
                  iterator = streamOpenAICompatible('https://api.together.xyz/v1/chat/completions', process.env.TOGETHER_API_KEY, 'meta-llama/Llama-3.3-70B-Instruct-Turbo-Free', messages);
@@ -225,9 +229,9 @@ export default async function handler(req) {
       
       let modelsToTry = [];
       if (provider === 'GOOGLE_EXP') {
-         modelsToTry = ['gemini-2.0-flash-thinking-exp-01-21', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+         modelsToTry = ['gemini-2.0-flash-thinking-exp-01-21', 'gemini-2.0-flash', 'gemini-flash-latest'];
       } else {
-         modelsToTry = ['gemini-2.0-flash', 'gemini-1.5-flash'];
+         modelsToTry = ['gemini-2.0-flash', 'gemini-2.0-flash-lite-preview-02-05', 'gemini-flash-latest'];
       }
 
       let lastError = null;
@@ -257,7 +261,7 @@ export default async function handler(req) {
       if (provider === 'GROQ') {
         resultText = await fetchOpenAICompatibleBlock('https://api.groq.com/openai/v1/chat/completions', process.env.GROQ_API_KEY, 'llama-3.3-70b-versatile', messages);
       } else if (provider === 'OPENROUTER') {
-        resultText = await fetchOpenAICompatibleBlock('https://openrouter.ai/api/v1/chat/completions', process.env.OPENROUTER_API_KEY, 'google/gemini-2.0-flash-lite-preview-02-05:free', messages);
+        resultText = await fetchOpenAICompatibleBlock('https://openrouter.ai/api/v1/chat/completions', process.env.OPENROUTER_API_KEY, 'google/gemini-2.0-flash-exp:free', messages);
       } else if (provider === 'TOGETHER') {
         resultText = await fetchOpenAICompatibleBlock('https://api.together.xyz/v1/chat/completions', process.env.TOGETHER_API_KEY, 'meta-llama/Llama-3.3-70B-Instruct-Turbo-Free', messages);
       } else if (provider === 'OLLAMA') {

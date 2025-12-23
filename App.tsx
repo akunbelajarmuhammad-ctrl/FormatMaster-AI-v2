@@ -458,7 +458,7 @@ function App() {
                 <option value={AIProvider.GOOGLE}>Google Gemini (Auto Fallback)</option>
                 <option value={AIProvider.GOOGLE_EXP}>Google Gemini Thinking (Reasoning)</option>
                 <option value={AIProvider.GROQ}>Groq Cloud (Llama 3.3 70B)</option>
-                <option value={AIProvider.OPENROUTER}>OpenRouter (Gemini Flash Lite Free)</option>
+                <option value={AIProvider.OPENROUTER}>OpenRouter (Gemini Flash Exp Free)</option>
                 <option value={AIProvider.TOGETHER}>Together AI (Llama 3.3 70B)</option>
                 <option value={AIProvider.OLLAMA}>Ollama Local (Server Sendiri)</option>
               </select>
