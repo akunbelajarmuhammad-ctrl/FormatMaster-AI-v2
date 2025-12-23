@@ -5,7 +5,6 @@ export const config = {
 };
 
 // Helper for streaming OpenAI-compatible APIs (Groq, OpenRouter, etc)
-// Parses SSE (Server-Sent Events) lines "data: {...}" into raw text
 async function* streamOpenAICompatible(url, apiKey, model, messages) {
   const response = await fetch(url, {
     method: 'POST',
@@ -20,16 +19,20 @@ async function* streamOpenAICompatible(url, apiKey, model, messages) {
       messages: messages,
       temperature: 0.7,
       max_tokens: 4096,
-      stream: true // Enable Streaming
+      stream: true
     })
   });
 
   if (response.status === 429) {
-    throw new Error("Limit jalur ini sudah habis, silakan pindah ke jalur lain di menu dropdown!");
+    throw new Error("Limit jalur ini sudah habis, silakan pindah ke jalur lain (misal: OpenRouter)!");
   }
 
   if (!response.ok) {
     const err = await response.text();
+    // Special handling for Groq decommissioned models
+    if (err.includes("model_decommissioned")) {
+        throw new Error("Model AI ini sudah pensiun. Developer sedang mengupdate sistem...");
+    }
     throw new Error(`Provider Error (${response.status}): ${err}`);
   }
 
@@ -43,7 +46,7 @@ async function* streamOpenAICompatible(url, apiKey, model, messages) {
     
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split('\n');
-    buffer = lines.pop(); // Keep the last incomplete line
+    buffer = lines.pop();
 
     for (const line of lines) {
       if (line.trim() === 'data: [DONE]') return;
@@ -53,7 +56,7 @@ async function* streamOpenAICompatible(url, apiKey, model, messages) {
           const text = json.choices[0]?.delta?.content || '';
           if (text) yield text;
         } catch (e) {
-          // ignore parse errors for partial chunks
+          // ignore
         }
       }
     }
@@ -78,7 +81,7 @@ async function fetchOpenAICompatibleBlock(url, apiKey, model, messages) {
     })
   });
 
-  if (response.status === 429) throw new Error("Limit jalur ini sudah habis!");
+  if (response.status === 429) throw new Error("Limit jalur ini habis!");
   if (!response.ok) {
     const err = await response.text();
     throw new Error(`Error ${response.status}: ${err}`);
@@ -88,7 +91,6 @@ async function fetchOpenAICompatibleBlock(url, apiKey, model, messages) {
 }
 
 export default async function handler(req) {
-  // Edge runtime uses standard Request/Response objects
   if (req.method === 'OPTIONS') {
     return new Response(null, {
       status: 200,
@@ -105,7 +107,7 @@ export default async function handler(req) {
   }
 
   try {
-    const { modelName, contents, config, provider = 'GOOGLE', stream = false } = await req.json();
+    const { contents, config, provider = 'GOOGLE', stream = false } = await req.json();
 
     // --- STREAMING HANDLER ---
     if (stream) {
@@ -113,31 +115,56 @@ export default async function handler(req) {
       const readable = new ReadableStream({
         async start(controller) {
           try {
-            // GOOGLE STREAMING
+            // GOOGLE STREAMING WITH FALLBACK
             if (provider === 'GOOGLE' || provider === 'GOOGLE_EXP') {
-              // UPDATED: Check for both standard API_KEY and Vercel Integration GOOGLE_GENERATIVE_AI_API_KEY
               const apiKey = process.env.API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-              
-              if (!apiKey) throw new Error("API Key Google missing (API_KEY or GOOGLE_GENERATIVE_AI_API_KEY)");
+              if (!apiKey) throw new Error("API Key Google missing");
               const ai = new GoogleGenAI({ apiKey });
               
-              // Determine model based on provider selection
-              const targetModel = provider === 'GOOGLE_EXP' ? 'gemini-2.0-flash-exp' : 'gemini-1.5-flash';
-
-              // Call Gemini Stream
-              const result = await ai.models.generateContentStream({
-                model: targetModel,
-                contents: contents,
-                config: config
-              });
-
-              for await (const chunk of result.stream) {
-                const text = chunk.text();
-                if (text) controller.enqueue(encoder.encode(text));
+              // MODEL LIST TO TRY
+              let modelsToTry = [];
+              if (provider === 'GOOGLE_EXP') {
+                 // Try Thinking first, then Standard 2.0, then 1.5
+                 modelsToTry = ['gemini-2.0-flash-thinking-exp-01-21', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+              } else {
+                 // Try 2.0 Flash first (New Standard), then 1.5 Flash (Old Faithful)
+                 modelsToTry = ['gemini-2.0-flash', 'gemini-1.5-flash'];
               }
 
+              let success = false;
+              let lastError = null;
+
+              for (const model of modelsToTry) {
+                try {
+                  const result = await ai.models.generateContentStream({
+                    model: model,
+                    contents: contents,
+                    config: config
+                  });
+
+                  for await (const chunk of result.stream) {
+                    const text = chunk.text();
+                    if (text) {
+                      controller.enqueue(encoder.encode(text));
+                      success = true; // Mark as success once we get data
+                    }
+                  }
+                  
+                  if (success) break; // If finished successfully, stop trying other models
+
+                } catch (e) {
+                  console.warn(`Model ${model} failed, trying next... Error: ${e.message}`);
+                  lastError = e;
+                  // If we already sent partial data (success=true), we can't really retry cleanly in this simple stream
+                  // So we only retry if we haven't sent ANYTHING yet.
+                  if (success) break; 
+                }
+              }
+
+              if (!success && lastError) throw lastError;
+
             } else {
-              // OTHER PROVIDERS STREAMING
+              // OTHER PROVIDERS
               let iterator;
               const userPrompt = typeof contents === 'string' ? contents : contents.parts?.[0]?.text || JSON.stringify(contents);
               const messages = [
@@ -145,13 +172,18 @@ export default async function handler(req) {
                 { role: "user", content: userPrompt }
               ];
 
+              // UPDATED MODELS HERE
               if (provider === 'GROQ') {
-                 iterator = streamOpenAICompatible('https://api.groq.com/openai/v1/chat/completions', process.env.GROQ_API_KEY, 'llama-3.1-70b-versatile', messages);
+                 // Llama 3.3 70B (Replaces 3.1)
+                 iterator = streamOpenAICompatible('https://api.groq.com/openai/v1/chat/completions', process.env.GROQ_API_KEY, 'llama-3.3-70b-versatile', messages);
               } else if (provider === 'OPENROUTER') {
-                 iterator = streamOpenAICompatible('https://openrouter.ai/api/v1/chat/completions', process.env.OPENROUTER_API_KEY, 'mistralai/mistral-7b-instruct:free', messages);
+                 // Use Google Flash Lite Free via OpenRouter (Often more stable than Mistral Free)
+                 iterator = streamOpenAICompatible('https://openrouter.ai/api/v1/chat/completions', process.env.OPENROUTER_API_KEY, 'google/gemini-2.0-flash-lite-preview-02-05:free', messages);
               } else if (provider === 'TOGETHER') {
-                 iterator = streamOpenAICompatible('https://api.together.xyz/v1/chat/completions', process.env.TOGETHER_API_KEY, 'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo', messages);
+                 // Llama 3.3 70B Turbo
+                 iterator = streamOpenAICompatible('https://api.together.xyz/v1/chat/completions', process.env.TOGETHER_API_KEY, 'meta-llama/Llama-3.3-70B-Instruct-Turbo-Free', messages);
               } else if (provider === 'OLLAMA') {
+                 // ... existing ollama logic ...
                  const baseUrl = process.env.OLLAMA_BASE_URL;
                  const response = await fetch(`${baseUrl}/api/chat`, {
                     method: 'POST',
@@ -159,8 +191,6 @@ export default async function handler(req) {
                     body: JSON.stringify({ model: 'llama3', messages, stream: true })
                  });
                  if (!response.ok) throw new Error("Ollama Error");
-                 
-                 // Fallback block for Ollama complexity
                  const blockText = await fetchOpenAICompatibleBlock(`${baseUrl}/api/chat`, '', 'llama3', messages); 
                  controller.enqueue(encoder.encode(blockText));
                  controller.close();
@@ -182,30 +212,42 @@ export default async function handler(req) {
       });
 
       return new Response(readable, {
-        headers: {
-          'Content-Type': 'text/plain; charset=utf-8',
-          'Access-Control-Allow-Origin': '*'
-        }
+        headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Access-Control-Allow-Origin': '*' }
       });
     }
 
-    // --- BLOCKING HANDLER (Old Logic for Tables/Chapters) ---
+    // --- BLOCKING HANDLER ---
     let resultText = "";
     
     if (provider === 'GOOGLE' || provider === 'GOOGLE_EXP') {
-      // UPDATED: Check for both standard API_KEY and Vercel Integration GOOGLE_GENERATIVE_AI_API_KEY
       const apiKey = process.env.API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-      
       const ai = new GoogleGenAI({ apiKey });
-      const targetModel = provider === 'GOOGLE_EXP' ? 'gemini-2.0-flash-exp' : 'gemini-1.5-flash';
-      const response = await ai.models.generateContent({
-        model: targetModel,
-        contents: contents,
-        config: config
-      });
-      resultText = response.text;
+      
+      let modelsToTry = [];
+      if (provider === 'GOOGLE_EXP') {
+         modelsToTry = ['gemini-2.0-flash-thinking-exp-01-21', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+      } else {
+         modelsToTry = ['gemini-2.0-flash', 'gemini-1.5-flash'];
+      }
+
+      let lastError = null;
+      for (const model of modelsToTry) {
+        try {
+           const response = await ai.models.generateContent({
+            model: model,
+            contents: contents,
+            config: config
+          });
+          resultText = response.text;
+          break; // Success
+        } catch (e) {
+          console.warn(`Model ${model} failed (blocking), trying next...`);
+          lastError = e;
+        }
+      }
+      if (!resultText && lastError) throw lastError;
+
     } else {
-      // Logic for Block requests (Chapters/Tables) using OpenAI format
       const userPrompt = typeof contents === 'string' ? contents : contents.parts?.[0]?.text || JSON.stringify(contents);
       const messages = [
         { role: "system", content: config?.systemInstruction || "You are a helpful assistant." },
@@ -213,11 +255,11 @@ export default async function handler(req) {
       ];
 
       if (provider === 'GROQ') {
-        resultText = await fetchOpenAICompatibleBlock('https://api.groq.com/openai/v1/chat/completions', process.env.GROQ_API_KEY, 'llama-3.1-70b-versatile', messages);
+        resultText = await fetchOpenAICompatibleBlock('https://api.groq.com/openai/v1/chat/completions', process.env.GROQ_API_KEY, 'llama-3.3-70b-versatile', messages);
       } else if (provider === 'OPENROUTER') {
-        resultText = await fetchOpenAICompatibleBlock('https://openrouter.ai/api/v1/chat/completions', process.env.OPENROUTER_API_KEY, 'mistralai/mistral-7b-instruct:free', messages);
+        resultText = await fetchOpenAICompatibleBlock('https://openrouter.ai/api/v1/chat/completions', process.env.OPENROUTER_API_KEY, 'google/gemini-2.0-flash-lite-preview-02-05:free', messages);
       } else if (provider === 'TOGETHER') {
-        resultText = await fetchOpenAICompatibleBlock('https://api.together.xyz/v1/chat/completions', process.env.TOGETHER_API_KEY, 'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo', messages);
+        resultText = await fetchOpenAICompatibleBlock('https://api.together.xyz/v1/chat/completions', process.env.TOGETHER_API_KEY, 'meta-llama/Llama-3.3-70B-Instruct-Turbo-Free', messages);
       } else if (provider === 'OLLAMA') {
          const baseUrl = process.env.OLLAMA_BASE_URL;
          const response = await fetch(`${baseUrl}/api/chat`, {
@@ -237,7 +279,7 @@ export default async function handler(req) {
   } catch (error) {
     console.error("API Error:", error);
     const msg = error.message || "Internal Server Error";
-    const status = msg.includes("Limit") ? 429 : 500;
+    const status = (msg.includes("Limit") || msg.includes("429")) ? 429 : 500;
     return new Response(JSON.stringify({ error: msg }), { 
       status, 
       headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } 

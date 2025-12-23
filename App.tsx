@@ -455,11 +455,11 @@ function App() {
                 onChange={(e) => setProvider(e.target.value as AIProvider)}
                 className="appearance-none bg-slate-50 border border-slate-300 text-slate-700 py-1.5 pl-3 pr-8 rounded-lg text-sm font-medium focus:ring-2 focus:ring-blue-500 focus:border-blue-500 cursor-pointer shadow-sm hover:bg-slate-100 transition-colors"
               >
-                <option value={AIProvider.GOOGLE}>Google Gemini 1.5 Flash (Gratis/Stable)</option>
-                <option value={AIProvider.GOOGLE_EXP}>Google Gemini 2.0 Flash (Experimental)</option>
-                <option value={AIProvider.GROQ}>Groq Cloud (Llama 3 70B - Turbo)</option>
-                <option value={AIProvider.OPENROUTER}>OpenRouter (Mistral 7B - Backup)</option>
-                <option value={AIProvider.TOGETHER}>Together AI (Llama 3 8B - Alt)</option>
+                <option value={AIProvider.GOOGLE}>Google Gemini (Auto Fallback)</option>
+                <option value={AIProvider.GOOGLE_EXP}>Google Gemini Thinking (Reasoning)</option>
+                <option value={AIProvider.GROQ}>Groq Cloud (Llama 3.3 70B)</option>
+                <option value={AIProvider.OPENROUTER}>OpenRouter (Gemini Flash Lite Free)</option>
+                <option value={AIProvider.TOGETHER}>Together AI (Llama 3.3 70B)</option>
                 <option value={AIProvider.OLLAMA}>Ollama Local (Server Sendiri)</option>
               </select>
               <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-500">
